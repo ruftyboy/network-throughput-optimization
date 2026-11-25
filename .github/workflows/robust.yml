@@ -1,0 +1,48 @@
+name: Robust network research
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - robust_benchmark.py
+      - .github/workflows/robust.yml
+permissions:
+  contents: read
+jobs:
+  historical:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - run: python robust_benchmark.py --mode traces --train 3 --test 6 --seconds 45 --output results/traces.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: historical-robust-results
+          path: results/traces.json
+          if-no-files-found: warn
+          retention-days: 30
+  zoo:
+    strategy:
+      fail-fast: false
+      matrix:
+        offset: [0, 30, 60, 90]
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - run: python robust_benchmark.py --mode zoo --train 3 --test 6 --limit 30 --offset ${{ matrix.offset }} --seconds 10 --output results/zoo-${{ matrix.offset }}.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zoo-robust-${{ matrix.offset }}
+          path: results/zoo-${{ matrix.offset }}.json
+          if-no-files-found: warn
+          retention-days: 30
