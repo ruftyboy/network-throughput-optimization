@@ -96,9 +96,10 @@ class Engine:
                 for i in np.flatnonzero(column!=prev):
                     check(h.changeCoeff(int(i),p.f,float(column[i])))
                     self.coeff_changes+=1
-                if np.any(b!=prev_b):
-                    ids=np.arange(p.q,p.q+p.m,dtype=np.int32)
-                    check(h.changeRowsBounds(p.m,ids,np.full(p.m,-hs.kHighsInf),b))
+                # highspy 1.11.0 exposes changeRowBounds, not changeRowsBounds.
+                # Update only changed capacity rows to minimize API overhead.
+                for i in np.flatnonzero(b!=prev_b):
+                    check(h.changeRowBounds(int(p.q+i),-hs.kHighsInf,float(b[i])))
                 self.updates+=1
                 check(h.clearSolver())
                 if self.mode=="warm":
