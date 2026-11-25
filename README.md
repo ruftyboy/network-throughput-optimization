@@ -70,3 +70,9 @@ Sources: https://sndlib.put.poznan.pl/dynamicmatrices.overview.action (cite the 
 
 Run locally: python robust_benchmark.py --mode traces --output results/traces.json
 Run topology subset: python robust_benchmark.py --mode zoo --limit 30 --offset 0 --seconds 10 --output results/zoo-0.json
+
+
+### Robust pilot correction
+Run 45539395296 failed because NumPy scalar booleans were not JSON-serializable in the topology jobs and GEANT had an empty selected matrix. The corrected implementation serializes NumPy scalars explicitly and writes artifacts atomically. Historical selection now uses disjoint chronological strata within each half, filters timestamped demand-matrix filenames, and attempts up to 12 nearest candidates per stratum when a matrix is empty; all such exclusions are recorded. This changes the sampled timestamps, so do not treat the old and new runs as identical. Both robust solvers now share a training-only first-snapshot feasible warm start; its computation and training evaluation time are reported separately. Include that overhead in end-to-end runtime comparisons. No test data is used to select the starting plan.
+
+The partial failed-run Germany50 artifact reported 25% gains on six held-out matrices for its first-snapshot baseline, while both robust methods returned zero-gain incumbents and did not close the gap. This is an exploratory result under modeled capacities, not an operational performance claim. The revised workflow must be validated before reporting aggregate results.
