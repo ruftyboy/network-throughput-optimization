@@ -1,0 +1,38 @@
+name: Cost-aware router upgrade research
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - cost_relaxation.py
+      - .github/workflows/cost-relaxation.yml
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - run: python cost_relaxation.py --mode self-test
+  historical:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - run: python cost_relaxation.py --mode historical --seconds 60 --iterations 6 --output results/cost-relaxation.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cost-relaxation-results
+          path: results/cost-relaxation.json
+          if-no-files-found: warn
+          retention-days: 30
