@@ -76,3 +76,23 @@ Run topology subset: python robust_benchmark.py --mode zoo --limit 30 --offset 0
 Run 45539395296 failed because NumPy scalar booleans were not JSON-serializable in the topology jobs and GEANT had an empty selected matrix. The corrected implementation serializes NumPy scalars explicitly and writes artifacts atomically. Historical selection now uses disjoint chronological strata within each half, filters timestamped demand-matrix filenames, and attempts up to 12 nearest candidates per stratum when a matrix is empty; all such exclusions are recorded. This changes the sampled timestamps, so do not treat the old and new runs as identical. Both robust solvers now share a training-only first-snapshot feasible warm start; its computation and training evaluation time are reported separately. Include that overhead in end-to-end runtime comparisons. No test data is used to select the starting plan.
 
 The partial failed-run Germany50 artifact reported 25% gains on six held-out matrices for its first-snapshot baseline, while both robust methods returned zero-gain incumbents and did not close the gap. This is an exploratory result under modeled capacities, not an operational performance claim. The revised workflow must be validated before reporting aggregate results.
+
+
+## Phase 4: balancing throughput and reliability
+
+The previous max-min pilot did not consistently beat edge betweenness on unseen synthetic traffic. This phase tests a different objective on the same topology sampling rule but a fresh, fixed synthetic seed (20261125), six training matrices and twelve held-out matrices per topology. The primary candidate is fixed before the new holdout is evaluated.
+
+For a feasible fixed matching x, let r_s(x)=F_s(x)/F_s(0) for training scenario s. Define
+J_lambda(x) = (1-lambda) mean_s r_s(x) + lambda min_s r_s(x).
+Compare lambda=0 (mean-only), 0.5 (primary balanced objective), and 1 (min-only). All use the same matching budget, common feasible starting candidates (zero, edge betweenness and first-snapshot), scenario-specific dual cuts, singleton cut initialization and nominal solver time budget. These shared candidate evaluations use training data only. Training guarantees do not imply holdout guarantees.
+
+### Mathematical formulation
+The master has binary upgrade vector x and continuous throughput variables y_s and z, with z <= y_s for every s. For each evaluated x0 and each scenario, duality supplies the valid bound y_s <= r_s(x0)+g_s dot (x-x0). Maximize (1-lambda) mean(y_s)+lambda z. Singleton inequalities strengthen each scenario's envelope. Because the objective is nondecreasing in every y_s, every master upper bound is valid for the true training objective in exact arithmetic. Each fully evaluated matching provides a lower bound. With exact solves, the finite set of matchings and tight cuts at previously queried matchings imply finite convergence. The implementation reports numerical gaps and time limits, not exact rational proofs. Small examples independently enumerate all feasible matchings and compare objective values for each lambda.
+
+The balanced solver is guaranteed to return a training objective at least as good as its shared evaluated starting candidates (up to numerical tolerance), but not necessarily to beat them on held-out traffic. This is a standard risk-sensitive scalarization and multi-cut decomposition, not an established novel algorithm. Report all paired wins, ties and losses, average gain, average per-topology minimum gain, balanced gain, gaps and timing. No post-hoc selection of lambda on the fresh synthetic holdout. Historical matrices are exploratory because earlier snapshots have already been inspected; assumed capacities remain explicitly labeled. Topology files may represent overlapping networks, so descriptive averages are not independent statistical estimates.
+
+Run: python balanced_benchmark.py --mode self-test
+Synthetic shard: python balanced_benchmark.py --mode zoo --train 6 --test 12 --seed 20261125 --limit 30 --offset 0 --seconds 15 --output results/zoo-0.json
+Historical pilot: python balanced_benchmark.py --mode traces --train 3 --test 6 --seconds 45 --output results/historical.json
+
+The separate Balanced network research workflow runs four synthetic shards and a historical pilot, then aggregates their JSON results. It targets 120 topology instances and 2,160 new synthetic traffic matrices; a successful workflow and inspected artifacts are required before claiming any new gains.
