@@ -96,6 +96,7 @@ class ScreenSolver:
         self.lp_screen_calls=0;self.removed=[]
         self.incidents=[];self.history=[]
         self.invalid=False
+        self.master_edge_counts=[]
 
     def global_upper(self):
         return max(self.active_upper,self.removed_upper)
@@ -146,6 +147,7 @@ class ScreenSolver:
                    constraints=LinearConstraint(A,-np.inf,b),
                    options={"time_limit":self.seconds,"mip_rel_gap":0.,"presolve":presolve})
             self.master_calls+=1
+            self.master_edge_counts.append(a)
             d=getattr(r,"mip_dual_bound",None)
             ub=1. if d is None or not math.isfinite(d) else min(1.,max(0.,float(-d)+MARGIN))
             problem=None
@@ -199,6 +201,9 @@ class ScreenSolver:
                   "certificate_withheld":invalid,"numerical_incidents":self.incidents+self.ev.incidents,
                   "initial_edges":self.p.m,"remaining_edges":len(self.active),
                   "fraction_edges_removed":1-len(self.active)/self.p.m,
+                  "first_master_edge_count":self.master_edge_counts[0] if self.master_edge_counts else None,
+                  "mean_master_edge_count":float(np.mean(self.master_edge_counts)) if self.master_edge_counts else None,
+                  "master_edge_counts":self.master_edge_counts,
                   "discarded_region_upper_pct":100*self.removed_upper,
                   "removed_edges":self.removed,"history":self.history,
                   "routing_lp_calls":self.ev.calls,"master_calls":self.master_calls,
