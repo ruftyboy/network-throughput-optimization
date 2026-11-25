@@ -1,0 +1,68 @@
+name: Concentrated upgrade generalization
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - concentration_benchmark.py
+      - summarize_concentration.py
+      - .github/workflows/concentration.yml
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - run: python concentration_benchmark.py --mode self-test
+  zoo:
+    needs: verify
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        capacity: [unit, heterogeneous]
+        offset: [0, 30, 60, 90]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - run: python concentration_benchmark.py --mode zoo --capacity ${{ matrix.capacity }} --offset ${{ matrix.offset }} --limit 30 --train 12 --test 24 --seconds 5 --iterations 6 --output results/${{ matrix.capacity }}-${{ matrix.offset }}.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: concentration-${{ matrix.capacity }}-${{ matrix.offset }}
+          path: results/*.json
+          if-no-files-found: warn
+          retention-days: 30
+  aggregate:
+    needs: zoo
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: concentration-*
+          path: inputs
+      - run: python summarize_concentration.py inputs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: concentration-summary
+          path: results/concentration-summary.json
+          if-no-files-found: warn
+          retention-days: 30
