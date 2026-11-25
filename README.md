@@ -141,3 +141,24 @@ All selections use the first 144 chronological snapshots only. Evaluate the fixe
 
 Run: python cost_relaxation.py --mode self-test
 Historical: python cost_relaxation.py --mode historical --seconds 60 --iterations 6 --output results/cost-relaxation.json
+
+
+## Phase 7: generalizing concentrated upgrades
+
+Germany50 cost-relaxation run 45546688019 reported 85.2913% mean held-out gain from doubling four Frankfurt links (4/88), with minimum 24.2149% and mean training optimum 90.2890% under the count policy. The 50% modeled incident-capacity headroom case yielded 49.4459% mean held-out gain. All these results are conditional on hypothetical capacities and the historical benchmark.
+
+### Structural theorem (tree case) and necessary condition (general case)
+
+For a tree, let L_e be the total demand crossing the partition created by deleting edge e. There is exactly one simple route for each demand. Hence the maximum concurrent throughput multiplier F(x)=min_{e:L_e>0} c_e(1+x_e)/L_e for binary doubling x. Write B=F(0)>0 and let a target gain tau>0 be fixed. Define R_tau={e:c_e < (1+tau)B L_e}. A target gain of at least tau is possible under a specified upgrade policy if and only if every edge in R_tau can be upgraded within the policy and 2c_e >= (1+tau)B L_e for all e. Indeed, each edge has to carry its unique-path load; these inequalities are necessary and sufficient. Under monotone count/cost/degree/headroom restrictions, checking the mandatory set alone suffices. This characterization follows directly from unique-path routing; novelty is not claimed.
+
+For any connected simple undirected graph the same inequalities on bridges are necessary, but generally not sufficient. In particular, two adjacent mandatory bridges make a target impossible under a matching policy. Combine these constraints with baseline capacity-price envelope g_s dot x >= tau z_s to bound the total number of scenarios attaining a threshold: require x_e>=z_s for each mandatory bridge, and force z_s=0 if even doubling a bridge is insufficient. A numerical upper bound on this integer maximization bounds actual threshold coverage. A serial two-edge equal-capacity path proves that unrestricted augmentation can yield positive throughput gain when matching-constrained augmentation yields zero, so there is no universal finite multiplicative bound on the ratio of gains (with a zero denominator, interpret this as failure of any finite factor inequality). This is about gains, not absolute throughput ratios, which are bounded by two in the doubling model.
+
+For nested policies, if L_r,U_r are feasible lower and valid upper bounds on training optimum for relaxed policy r and L_m,U_m for matching m, the true advantage is in [max(0,L_r-U_m), U_r-L_m]. The implementation checks cross-policy feasible placements against all upper bounds; strict positive lower bounds certify a training advantage numerically. None guarantees superiority on unseen traffic.
+
+### Controlled benchmark
+
+Run on the same deterministic sampling of 120 eligible topology files, using fresh synthetic traffic seed 20261127, 12 training and 24 held-out matrices per topology. Two distinct capacity regimes (unit and synthetic heterogeneous 1/2/4 with fixed seed 1701) give 240 topology-capacity instances; the traffic for each pair is identical. Report separately. The topology files can be overlapping snapshots, and the capacities/costs do not represent actual operator measurements.
+
+Compare equal count budgets floor(m/20): matching vs unrestricted; and equal cost and count budgets: matching, degree-two, unrestricted, and unrestricted with hypothetical 50% incident-capacity headroom. Normalized capacity cost c_e/median(c), router setup 0.25, total cost budget 1.5K. For unit capacities this cost budget does not independently bind any plan satisfying K, so it serves as a control; the heterogeneous regime makes the cost constraint potentially binding. All decisions use training data only, and prior feasible plans may warm-start subsequent policies. The iteration cap is six and the time limit is per master/LP call (not an equal total wall-clock budget). Holdout upper-bound optimization is retrospective and discards the placement. Report all training gaps, paired held-out differences, threshold success rates, number of links/routers and cost/capacity accounting. No significance testing treating topology files as independent.
+
+Verification: enumerate subsets on a heterogeneous tree to check the exact threshold characterization; check a two-edge path where relaxing the matching strictly improves throughput. Code: concentration_benchmark.py; paired summary: summarize_concentration.py. Run workflow Concentrated upgrade generalization; aggregate requires all eight 30-file shards and matching topology sets. Targets: 5,760 held-out evaluations at the topology-capacity-scenario level, not 5,760 independent network measurements.
