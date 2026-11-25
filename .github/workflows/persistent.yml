@@ -1,0 +1,56 @@
+name: Persistent bottleneck research
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - persistent_benchmark.py
+      - .github/workflows/persistent.yml
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - run: python persistent_benchmark.py --mode self-test
+  germany50:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - run: python persistent_benchmark.py --mode historical --seconds 60 --output results/germany50-full.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: germany50-full-day
+          path: results/germany50-full.json
+          if-no-files-found: warn
+          retention-days: 30
+  synthetic:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - run: python persistent_benchmark.py --mode synthetic --limit 30 --seconds 15 --output results/persistent-synthetic.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: persistent-synthetic
+          path: results/persistent-synthetic.json
+          if-no-files-found: warn
+          retention-days: 30
