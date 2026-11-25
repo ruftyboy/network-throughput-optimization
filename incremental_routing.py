@@ -10,6 +10,7 @@ import highspy as hs
 from scipy.sparse import vstack
 import robust_benchmark as rb
 import routing_reuse as old
+from routing_reuse import PAD, LOCAL, NUM
 from persistent_benchmark import SourceProblem
 from cost_relaxation import Policy, metrics, historical
 
@@ -22,7 +23,7 @@ class Engine:
         self.mode=mode;self.seconds=seconds
         self.pool={};self.bases={}
         self.calls=0;self.builds=0;self.updates=0;self.coeff_changes=0
-        self.basis_attempts=0;self.basis_rejections=0;self.fallbacks=0
+        self.basis_attempts=0;self.basis_rejections=0;self.fallbacks=0;self.scipy_fallbacks=0
         self.iterations=0;self.native_runs=0
         self.update_seconds=0.;self.solve_seconds=0.
 
@@ -135,6 +136,7 @@ class Engine:
                 if self.mode!="cold":self.pool[key]=(h,prev,prev_b)
                 if self.mode=="warm":self.bases[id(p)]=h.getBasis()
             except RuntimeError:
+                self.scipy_fallbacks+=1
                 out=old.solve(p,x,self.seconds)
             self.solve_seconds+=time.monotonic()-start
             return out
@@ -142,7 +144,7 @@ class Engine:
     def stats(self):
         return {"model_builds":self.builds,"model_updates":self.updates,
                 "coefficient_changes":self.coeff_changes,"basis_attempts":self.basis_attempts,
-                "basis_rejections":self.basis_rejections,"fallbacks":self.fallbacks,
+                "basis_rejections":self.basis_rejections,"fallbacks":self.fallbacks,"scipy_fallbacks":self.scipy_fallbacks,
                 "native_runs":self.native_runs,"simplex_iterations":self.iterations,
                 "engine_update_seconds":self.update_seconds,"engine_solve_seconds":self.solve_seconds}
 
@@ -224,6 +226,7 @@ def study(edges,cap,train,test,seconds,iterations):
         engine=Engine(mode,seconds)
         models,bases,G,loads=scan(edges,cap,train,K,seconds,engine)
         setup=time.monotonic()-start
+        baseline_stats=engine.stats()
         if reference is None:reference=bases.copy()
         elif not np.allclose(reference,bases,rtol=1e-6,atol=1e-8):
             raise RuntimeError("baseline values differ across engines")
@@ -231,7 +234,7 @@ def study(edges,cap,train,test,seconds,iterations):
         x,r=solver.run(iterations)
         records[name]={**r,**engine.stats(),"baseline_lp_calls":len(train),
             "baseline_skips":0,"candidate_skips":r["routing_calls_skipped"],
-            "baseline_seconds":setup,"total_selection_seconds":setup+r["selection_seconds"],
+            "baseline_seconds":setup,"baseline_engine_stats":baseline_stats,"total_selection_seconds":setup+r["selection_seconds"],
             "total_verified_seconds":setup+r["selection_seconds"]+r["final_replay_seconds"],
             "total_lp_calls":len(train)+r["routing_lp_calls"]+r["final_replay_calls"],
             "plan_edges":[list(edges[i]) for i in np.flatnonzero(x)]}
