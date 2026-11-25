@@ -1,0 +1,86 @@
+name: Cross-scenario certificate transfer
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - cross_scenario.py
+      - summarize_cross.py
+      - .github/workflows/cross.yml
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - run: python cross_scenario.py --mode self-test
+  zoo:
+    needs: verify
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        capacity: [unit, heterogeneous]
+        offset: [0, 30, 60, 90]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - run: python cross_scenario.py --mode zoo --capacity ${{ matrix.capacity }} --offset ${{ matrix.offset }} --limit 30 --seconds 5 --iterations 12 --output results/${{ matrix.capacity }}-${{ matrix.offset }}.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cross-${{ matrix.capacity }}-${{ matrix.offset }}
+          path: results/*.json
+          if-no-files-found: warn
+          retention-days: 30
+  historical:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - run: python cross_scenario.py --mode historical --seconds 60 --iterations 12 --output results/germany50.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cross-historical
+          path: results/germany50.json
+          if-no-files-found: warn
+          retention-days: 30
+  aggregate:
+    needs: [zoo, historical]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cross-*
+          path: inputs
+      - run: python summarize_cross.py inputs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cross-summary
+          path: results/cross-summary.json
+          if-no-files-found: warn
+          retention-days: 30
