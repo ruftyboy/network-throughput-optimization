@@ -48,3 +48,25 @@ The new dual-cut solver separates the binary matching master from a weighted mul
 See the SNDlib benchmark workflow for the JSON artifact. No speedup, throughput target, or superiority is established until results are inspected. The pilot uses default matrices; dynamic historical traffic and robust upgrades across multiple matrices remain future work.
 
 SNDlib source and attribution: https://sndlib.put.poznan.pl/networks.overview.action ; Orlowski, Wessäly, Pióro and Tomaszewski, SNDlib 1.0—Survivable Network Design Library, Networks 55(3), 2010.
+
+
+## Phase 3: robust upgrades across changing traffic
+
+One fixed matching of upgraded links is chosen before seeing held-out traffic. Routing may adapt to each matrix. For scenario s, let F_s(x) be the maximum concurrent flow with upgrade vector x and let B_s=F_s(0)>0. Maximize min_s F_s(x)/B_s over training scenarios. Report every held-out gain, its minimum and mean; the training bound does not certify unseen matrices.
+
+Historical traces: SNDlib dynamic matrices for Germany50 (288 five-minute matrices), GEANT (11,460 fifteen-minute matrices), and Abilene (48,096 five-minute matrices). Sample 3 training matrices from the first chronological half and 6 held-out matrices from the second half. This is a pilot sample, not a full historical replay. Preserve all positive published demand weights. Capacity policy is unchanged from Phase 2: module-derived capacities remain hypothetical. Abilene has zero allowed upgrades at the strict 5% budget. These historical matrices are measurement-derived, anonymized/aggregated as described by SNDlib; they are not current telemetry.
+
+Topology sweep: deterministically select up to 120 historical Topology Zoo files after preprocessing to the largest connected simple undirected component and filtering to 20–250 edges. Distinct files may represent versions of the same network. Use unit link capacity and 12 independently sampled weighted demands per scenario, three training and six holdout scenarios per topology. Separate these synthetic results from historical traffic. Report exclusions and errors rather than silently dropping failures. Four parallel shards of 30 files each target 1,080 traffic matrices if enough eligible files exist.
+
+### Algorithm and proof of valid strengthening
+
+For each scenario, LP duality gives F_s(y)/B_s <= F_s(x)/B_s + g_s dot (y-x)/B_s. Every cut is valid for all feasible upgrade vectors. Furthermore, for each vertex v, summing the demand crossing the singleton cut gives D_s(v). Then
+F_s(x)/B_s <= sum_{e incident to v} c_e(1+x_e)/(B_s D_s(v))
+whenever D_s(v)>0. This is a valid master inequality because each incident demand must cross that cut at least once. Add these inequalities before the first master solve. The strengthened master feasible region is contained in the plain master's region given identical dual cuts, so its upper bound cannot increase. This does not establish a runtime advantage. With exact subproblem and master solves, the finite matching space and tight cuts at queried plans yield finite convergence; implementation uses numerical tolerances and time limits.
+
+Compare the strengthened multi-scenario method against plain multi-scenario Benders on the historical traces, plus first-snapshot optimization, edge-betweenness and no upgrades. Compare with identical training samples and budget; report time and numerical gap. These are standard methods and valid inequalities, not a demonstrated novel theorem or state-of-the-art win. Full literature comparison, independently verified certificates and broader validation remain open.
+
+Sources: https://sndlib.put.poznan.pl/dynamicmatrices.overview.action (cite the original dynamic data references listed there); https://sndlib.put.poznan.pl/download/germany50-rm.txt ; https://github.com/mroughan/InternetTopologyZoo (Knight et al., IEEE JSAC 2011, DOI 10.1109/JSAC.2011.111002). Related work: Benders decomposition approach for the robust network design problem with flow bifurcations, DOI 10.1002/net.21486; Robust network design: Formulations, valid inequalities, and computations, DOI 10.1002/net.21497.
+
+Run locally: python robust_benchmark.py --mode traces --output results/traces.json
+Run topology subset: python robust_benchmark.py --mode zoo --limit 30 --offset 0 --seconds 10 --output results/zoo-0.json
