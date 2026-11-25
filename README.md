@@ -96,3 +96,28 @@ Synthetic shard: python balanced_benchmark.py --mode zoo --train 6 --test 12 --s
 Historical pilot: python balanced_benchmark.py --mode traces --train 3 --test 6 --seconds 45 --output results/historical.json
 
 The separate Balanced network research workflow runs four synthetic shards and a historical pilot, then aggregates their JSON results. It targets 120 topology instances and 2,160 new synthetic traffic matrices; a successful workflow and inspected artifacts are required before claiming any new gains.
+
+
+## Phase 5: persistent bottlenecks and a full-day Germany50 replay
+
+The Phase 4 balanced objective achieved 9.238% mean gain on 1,440 synthetic holdout matrices, versus 9.255% for mean-only and 8.836% for edge betweenness; the worst-case gains were negligible. All seven workflow jobs succeeded (run 45543005831). The Germany50 historical pilot achieved 25% on six holdout snapshots under modeled capacity. It is not an operational performance claim.
+
+### Mathematical screening guarantee
+Let F_s(x) denote maximum concurrent splittable flow for scenario s and B_s=F_s(0)>0. At zero upgrades, an optimal capacity dual gives a nonnegative normalized vector g_s with sum(g_s)=1 (in exact arithmetic). This follows from strong duality: the baseline capacity vector is the only nonzero right-hand side in the routing LP, so its inner product with the capacity prices equals B_s. Doubling selected edges adds capacity c_e x_e, hence
+0 <= F_s(x)/B_s - 1 <= g_s dot x.
+If the matching misses the support of g_s, the gain is exactly zero. Conversely, intersecting the support does NOT imply a positive gain. Degenerate duals may provide different supports, and a single support per scenario is not a uniquely identified physical bottleneck.
+
+For a target gain tau>0 introduce binary z_s and impose tau z_s <= g_s dot x, in addition to matching and upgrade-budget constraints. Any actual threshold success implies eligibility in this master, so maximizing sum(z_s) provides an upper bound on the number of scenarios that ANY allowed plan can improve by tau. The implementation uses a tie-breaking bonus in [0,0.5] on mean envelope gain; a valid objective upper bound rounded down bounds the integer coverage count. The evaluated candidate's actual coverage is a lower bound on achievable coverage. The numerical bounds are not exact rational certificates and need independent verification for publication. A retrospective holdout bound describes the limits of the model, and its optimizing placement is discarded.
+
+### Faster routing formulation
+Aggregate all commodities sharing the same source into a single flow with one supply and multiple specified sink balances. Summing ordinary commodity flows proves one direction; decomposing nonnegative aggregated flows into source-to-sink paths and discarding cycles proves the converse. This preserves the exact concurrent-flow optimum in the shared-capacity splittable routing model and reduces the number of commodities from the number of positive ordered demands to the number of active source nodes. Small-graph enumeration checks compare the aggregated LP with the original LP across feasible matchings. This is an established modeling technique, not a new theoretical result.
+
+### Predeclared experiments
+- Germany50: scan all 288 expected five-minute matrix files, first 144 for plan selection, last 144 for holdout; record any empty matrices and exact filenames and source hash. Previously inspected pilot snapshots overlap, so this is exploratory historical validation, not a wholly untouched holdout. Capacity policy remains the published-module hypothetical baseline where installed capacity is unavailable.
+- Synthetic: 30 deterministically selected eligible Topology Zoo files, fresh fixed random seed 20261126, 24 training and 24 held-out weighted traffic matrices per topology. Historical and synthetic results are kept separate.
+- Compare no upgrades, edge betweenness, first-snapshot, dual-frequency matching, dual-mean matching, dual-coverage matching, and balanced optimization on six deterministic training snapshots. Select one persistent variant based ONLY on training threshold coverage, then mean gain; evaluate all variants on the holdout without tuning. Report actual threshold coverage, mean, median, minimum, positive fraction, dual envelope and numerical coverage bound. Upgrade budget remains floor(m/20), and threshold is predeclared at 5%.
+- The 30-topology benchmark is an initial fresh-traffic pilot, not a test on entirely unseen topology families. The baseline methods have different selection costs; runtime comparisons must include full preprocessing and routing solves. No guarantee of superiority or novelty is claimed.
+
+Run locally: python persistent_benchmark.py --mode self-test
+Historical: python persistent_benchmark.py --mode historical --seconds 60 --output results/germany50-full.json
+Synthetic: python persistent_benchmark.py --mode synthetic --limit 30 --seconds 15 --output results/persistent-synthetic.json
