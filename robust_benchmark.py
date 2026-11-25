@@ -210,8 +210,14 @@ def trace_run(name,raw,args):
                 low=i*len(part)//count
                 high=(i+1)*len(part)//count
                 target=low if i==0 else high-1 if i==count-1 else (low+high-1)//2
-                order=sorted(range(low,high),key=lambda j:(abs(j-target),j))
-                for j in order[:12]:
+                # Prefer the original local candidates. If a long missing-data
+                # interval covers them, search a deterministic spread over the
+                # same chronological stratum, then the remaining timestamps.
+                local=sorted(range(low,high),key=lambda j:(abs(j-target),j))
+                wide=sorted(set(np.linspace(low,high-1,min(64,high-low),dtype=int).tolist()),
+                            key=lambda j:(abs(j-target),j))
+                order=list(dict.fromkeys(local[:12]+wide+local))
+                for j in order:
                     key=part[j]
                     try:
                         value=demands(t.extractfile(key).read(),nodes)
@@ -223,7 +229,7 @@ def trace_run(name,raw,args):
                         continue
                     chosen.append(key);values.append(value);break
                 else:
-                    raise ValueError("No nonempty matrix among 12 candidates in stratum "+str(i))
+                    raise ValueError("No nonempty matrix anywhere in stratum "+str(i))
             return chosen,values
         a,train=sample(names[:split],args.train)
         b,test=sample(names[split:],args.test)
