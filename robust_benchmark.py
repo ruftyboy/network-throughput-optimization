@@ -86,7 +86,7 @@ def endpoint_cuts(edges,cap,matrices,bases):
                 result.append((g,float(g.sum())))
     return result
 
-def robust(models,bases,seconds,extra=(),max_iterations=100):
+def robust(models,bases,seconds,extra=(),max_iterations=100,warm=None):
     """Multi-scenario cutting plane, optional singleton-cut initialization."""
     start=time.monotonic()
     p=models[0]; m=p.m
@@ -94,6 +94,11 @@ def robust(models,bases,seconds,extra=(),max_iterations=100):
     rhs=[a for _,a in extra]
     x=np.zeros(m)
     best=1.; incumbent=x.copy(); upper=2.; count=0; complete=0
+    if warm is not None:
+        incumbent, best = warm[0].copy(), float(warm[1])
+    if p.budget == 0:
+        return {"chosen":[],"worst_train_ratio":1.,"upper_bound":1.,"iterations":0,
+                "master_solves":0,"seconds":time.monotonic()-start,"closed_gap":True}
     for _ in range(max_iterations):
         vals=[]
         for model,base in zip(models,bases):
@@ -134,18 +139,25 @@ def robust(models,bases,seconds,extra=(),max_iterations=100):
         raise RuntimeError("Inconsistent numeric bounds")
     return {"chosen":np.flatnonzero(incumbent).tolist(),"worst_train_ratio":best,
             "upper_bound":max(best,upper),"iterations":count,"master_solves":complete,
-            "seconds":time.monotonic()-start,"closed_gap":upper-best<=1e-7}
+            "seconds":time.monotonic()-start,"closed_gap":bool(upper-best<=1e-7)}
 
 def evaluate(edges,cap,train,test,seconds,compare):
     budget=len(edges)//20
     models,bases=make_models(edges,cap,train,budget,seconds)
     held,hbases=make_models(edges,cap,test,budget,seconds)
-    plain=robust(models,bases,seconds) if compare else None
-    strong=robust(models,bases,seconds,endpoint_cuts(edges,cap,train,bases))
+    # Both robust variants start from the same feasible first-snapshot plan,
+    # evaluated only on training data. Report this shared overhead separately.
+    warm_start=time.monotonic()
+    single=models[0].cuts(seconds)
+    warm_x=np.zeros(len(edges));warm_x[single["chosen"]]=1
+    models[0].plan(warm_x)
+    warm=(warm_x,max(1.,min(score(models,bases,warm_x,seconds))))
+    warm_seconds=time.monotonic()-warm_start
+    plain=robust(models,bases,seconds,warm=warm) if compare else None
+    strong=robust(models,bases,seconds,endpoint_cuts(edges,cap,train,bases),warm=warm)
     if plain and (strong["worst_train_ratio"]>plain["upper_bound"]+1e-6 or
                   plain["worst_train_ratio"]>strong["upper_bound"]+1e-6):
         raise RuntimeError("Methods disagree on valid bounds")
-    single=models[0].cuts(seconds)
     plans={"endpoint_robust":strong["chosen"],"single_snapshot":single["chosen"],"no_upgrade":[]}
     if plain:
         plans["plain_robust"]=plain["chosen"]
@@ -173,7 +185,8 @@ def evaluate(edges,cap,train,test,seconds,compare):
                        "mean_test_gain_pct":100*(np.mean(b)-1)}
     return {"budget":budget,"nodes":models[0].n,"links":len(edges),
             "train_demands":[len(d) for d in train],"test_demands":[len(d) for d in test],
-            "plain":plain,"strengthened":strong,"plans":results}
+            "plain":plain,"strengthened":strong,"plans":results,
+            "shared_warm_start_seconds":warm_seconds,"warm_train_ratio":warm[1]}
 
 def trace_run(name,raw,args):
     edges,cap,_,meta=parse(raw,name,"module")
@@ -182,19 +195,41 @@ def trace_run(name,raw,args):
     # Select matrix names first, then extract only the selected XML files.
     # Avoid retaining tens of thousands of uncompressed XML matrices in RAM.
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as t:
-        names=sorted((m.name for m in t.getmembers() if m.isfile() and m.name.lower().endswith(".xml")),key=lambda k:Path(k).name)
+        names=sorted((m.name for m in t.getmembers() if m.isfile() and
+                      Path(m.name).name.lower().startswith("demandmatrix") and
+                      m.name.lower().endswith(".xml")),key=lambda k:Path(k).name)
         split=len(names)//2
-        a=spread(names[:split],args.train);b=spread(names[split:],args.test)
-        wanted=set(a+b)
-        selected={}
-        for member in t.getmembers():
-            if member.name in wanted:
-                selected[member.name]=demands(t.extractfile(member).read(),nodes)
-    train=[selected[k] for k in a]
-    test=[selected[k] for k in b]
+        rejected=[]
+        # Deterministic chronological strata; replace empty snapshots with
+        # the nearest nonempty matrix within the same stratum. No gain-based selection.
+        def sample(part,count):
+            if len(part)<count:
+                raise ValueError("Insufficient timestamped demand matrices")
+            chosen, values=[],[]
+            for i in range(count):
+                low=i*len(part)//count
+                high=(i+1)*len(part)//count
+                target=low if i==0 else high-1 if i==count-1 else (low+high-1)//2
+                order=sorted(range(low,high),key=lambda j:(abs(j-target),j))
+                for j in order[:12]:
+                    key=part[j]
+                    try:
+                        value=demands(t.extractfile(key).read(),nodes)
+                    except ValueError as exc:
+                        if str(exc)!="Empty traffic matrix":
+                            raise
+                        rejected.append({"file":key,"reason":str(exc)})
+                        print("Excluded empty matrix",key,flush=True)
+                        continue
+                    chosen.append(key);values.append(value);break
+                else:
+                    raise ValueError("No nonempty matrix among 12 candidates in stratum "+str(i))
+            return chosen,values
+        a,train=sample(names[:split],args.train)
+        b,test=sample(names[split:],args.test)
     return {**meta,"network":name,"traffic":"historical measurement-derived",
             "trace_url":TRACES[name],"trace_sha256":hashlib.sha256(data).hexdigest(),
-            "available_matrices":len(names),"train_files":a,"test_files":b,
+            "available_matrices":len(names),"train_files":a,"test_files":b,"excluded_empty_matrices":rejected,
             **evaluate(edges,cap,train,test,args.seconds,True)}
 
 def zoo_run(args,rows,errors,skips):
@@ -229,14 +264,24 @@ def zoo_run(args,rows,errors,skips):
             print(name,row["plans"]["endpoint_robust"]["worst_test_gain_pct"],flush=True)
         except Exception as e:
             errors.append({"network":name,"error":str(e)})
+            print(name,type(e).__name__,str(e),flush=True)
         save(args,rows,errors,skips)
+
+def json_scalar(value):
+    if isinstance(value,np.generic):
+        return value.item()
+    raise TypeError("Unsupported JSON value: "+type(value).__name__)
 
 def save(args,rows,errors,skips):
     path=Path(args.output);path.parent.mkdir(parents=True,exist_ok=True)
-    path.write_text(json.dumps({"mode":args.mode,"results":rows,"errors":errors,"skipped":skips},
-                               indent=2,allow_nan=False))
+    encoded=json.dumps({"mode":args.mode,"results":rows,"errors":errors,"skipped":skips},
+                       indent=2,allow_nan=False,default=json_scalar)
+    tmp=path.with_suffix(path.suffix+".tmp")
+    tmp.write_text(encoded)
+    tmp.replace(path)
 
 def self_test():
+    assert json.loads(json.dumps({"flag":np.bool_(True),"value":np.float64(1.0)},default=json_scalar)) == {"flag":True,"value":1.0}
     # Disjoint bottlenecks: no single edge upgrade helps both scenarios.
     edges=[("a","b"),("b","c"),("c","d")]
     cap=[1.,1.,1.]; train=[[("a","b",1.)],[("c","d",1.)]]
@@ -270,6 +315,7 @@ def main():
                     print(name,row["plans"]["endpoint_robust"]["worst_test_gain_pct"],flush=True)
                 except Exception as e:
                     errors.append({"network":name,"error":str(e)})
+                    print(name,type(e).__name__,str(e),flush=True)
                 save(args,rows,errors,skips)
         except Exception as e:
             errors.append({"stage":"trace setup","error":str(e)})
