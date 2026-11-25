@@ -62,15 +62,18 @@ class ReuseSolver:
         self.cache={(): (np.zeros(self.k),np.zeros(self.k))}
         self.history=[]
 
-    def bounds(self,x):
+    def bounds(self,x,use_primal=True):
         start=time.monotonic()
         vals=np.stack([np.maximum(g,0.)@x+np.maximum(b,0.)+CUT_PAD for g,b in self.cuts])
         idx=np.argmin(vals,axis=0)
         hi=np.minimum(1.,np.min(vals,axis=0)+PAD)
         lo=[]
-        for flows in self.flows:
-            rates=np.asarray([r for r,_ in flows]);loads=np.asarray([l for _,l in flows])
-            lo.append(lower_from_flows(x,rates,loads))
+        if use_primal:
+            for flows in self.flows:
+                rates=np.asarray([r for r,_ in flows]);loads=np.asarray([l for _,l in flows])
+                lo.append(lower_from_flows(x,rates,loads))
+        else:
+            lo=np.zeros(self.k)
         lo=np.asarray(lo)
         if np.any(lo>hi+NUM):raise RuntimeError("reused lower exceeds upper")
         self.bound_time+=time.monotonic()-start
@@ -80,7 +83,7 @@ class ReuseSolver:
         self.p.validate(x);key=tuple(np.flatnonzero(x))
         if key in self.cache:return False
         self.queries+=1
-        lo,hi,idx=self.bounds(x)
+        lo,hi,idx=self.bounds(x,use_primal=self.mode!='full')
         # Fill skipped cut rows with a previously valid supporting cut.
         # For solved rows, replace with the new supporting cut.
         gs=np.stack([self.cuts[j][0][s] for s,j in enumerate(idx)])
