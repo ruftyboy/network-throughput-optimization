@@ -206,3 +206,24 @@ Same 120 topology-file sampling rule, fresh synthetic traffic seed 20261129, 12 
 Relevant literature: reduced-cost fixing and strong fixing, The Dual-Path Fixing Strategy and Its Application to the Set-Covering Problem (https://drops.dagstuhl.de/storage/00lipics/lipics-vol371-sea2026/html/LIPIcs.SEA.2026.28/LIPIcs.SEA.2026.28.html); Decomposition Methods for Network Design (https://www.sciencedirect.com/science/article/pii/S1877042811013863).
 
 Run python screening_benchmark.py --mode self-test. Workflow: Dual-guided edge screening; aggregate artifact: screening-summary. Targets of 80–95% candidate elimination and 10x speedup are hypotheses, not results.
+
+
+## Phase 10: certificate-guided routing calculation elimination
+
+Phase 9 run 45551778770 achieved 81.08% final mean candidate elimination in the heterogeneous regime, but hybrid screening was slightly slower overall and the routing LP count was almost unchanged. This phase isolates routing reuse, without edge screening.
+
+### Mathematical bounds and skipping rule
+
+For fixed scenario s and old feasible multicommodity flow with throughput multiplier r and total edge loads l_e, let c'_e be capacities at a proposed new placement. Scaling every flow and demand multiplier by alpha=min_{e:l_e>0} c'_e/l_e yields another feasible flow, so alpha*r is a lower bound on the new optimum. Take the maximum over stored flows (and baseline monotonicity). Store normalized loads and rates, rather than full flow vectors, for reuse within the same scenario. Feasibility is conditional on the original flow's validity. Numerical routing solutions are checked for residuals and bounds are padded; these are not exact rational certificates.
+
+At each previous routing optimum, the capacity dual supplies a global supporting upper bound. Take the minimum of these cuts and the physical doubling ceiling. Combining these gives per-scenario lower and upper bounds. Their means bound the training objective. When the mean gap is at most epsilon/4 (0.125 percentage points), skip remaining routing solves. The lazy variant can additionally stop evaluating a candidate if its mean upper bound is at most the incumbent plus epsilon/4. Unsolved scenario rows retain existing dual cuts; no approximate primal value is misrepresented as a new supporting cut. The master retains a global upper bound, and a feasible incumbent retains its lower bound. The algorithm can stop with an open gap on repeat candidates or computation caps; it does not promise finite epsilon convergence under the caps. Full training replay checks the chosen plan and its bounds. Contradictions with global bounds result in withheld certificates, not an assertion of success.
+
+Related work includes Benders decomposition with adaptive oracles for large scale optimization (https://doi.org/10.1007/s12532-020-00197-0) and Adaptive Subproblem Selection in Benders Decomposition for Survivable Network Design Problems (https://drops.dagstuhl.de/storage/00lipics/lipics-vol371-sea2026/html/LIPIcs.SEA.2026.17/LIPIcs.SEA.2026.17.html). Reusing primal/dual bounds and adaptive subproblem selection are established research directions. Our specialization and experimental comparisons do not establish novelty or superiority over published full implementations.
+
+### Paired evaluation
+
+Same unrestricted cost-aware policy and multicut master in three modes: full routing solves for every queried plan, reuse with gap-driven scenario selection, and lazy reuse with early candidate rejection. Private caches, identical baseline scan and nominal per-solve limits, at most 12 candidate queries each, 0.5 percentage point global tolerance. The full mode still computes dual bounds for consistency checks but does not compute primal reuse bounds or skip candidate solves. Include common model preparation/baseline scans, all master and certificate overhead, and full final training replay in reported verified runtime. Report candidate skips separately from actual total routing-call reduction including scans and replays, and separate held-out quality. Holdout replay is evaluation, not optimization timing. Time limits are per solve, not identical global wall-time caps.
+
+Use the same 120 topology-file sampling rule, fresh fixed synthetic seed 20261130, 24 training and 24 held-out matrices per topology and capacity regime (unit/heterogeneous). Re-run the 288 historical Germany50 snapshots (144 training/144 holdout) as a heavier exploratory workload with hypothetical module capacities; previously inspected data are not a fresh holdout. Target 240 synthetic instances plus one historical instance. Small-graph enumeration checks reused bounds against full LP solutions and verifies all modes, including an instance where routing solves can be skipped entirely. No new operational capacity evidence is claimed.
+
+Run python routing_reuse.py --mode self-test. Workflow: Certificate-guided routing reuse. Aggregate artifact: reuse-summary.
