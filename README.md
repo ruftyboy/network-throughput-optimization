@@ -121,3 +121,23 @@ Aggregate all commodities sharing the same source into a single flow with one su
 Run locally: python persistent_benchmark.py --mode self-test
 Historical: python persistent_benchmark.py --mode historical --seconds 60 --output results/germany50-full.json
 Synthetic: python persistent_benchmark.py --mode synthetic --limit 30 --seconds 15 --output results/persistent-synthetic.json
+
+
+## Phase 6: capacity augmentation beyond a matching
+
+The full-day Germany50 replay (run 45544465195) evaluated all 288 matrices. Under modeled capacities, the Frankfurt–Koblenz upgrade achieved a mean 24.9887% and minimum 23.3773% gain over the 144 held-out snapshots. The baseline training dual ranking assigns 0.25 average normalized shadow weight to each of Frankfurt's four incident links. Thus a per-router upgrade limit d implies an average training gain upper bound of min(d/4,1) for this particular numerical dual vector. It does not imply attainability. The existing data are exploratory and do not establish current physical network performance.
+
+### New optimization and cost model
+
+Let x_e be binary link doubling decisions, z_v binary router activation, d the maximum number of upgrades incident to a router, and K=floor(m/20). Impose sum(x)<=K, z_v <= sum_{e incident to v} x_e <= d z_v. Optionally impose sum(c_e^cost x_e)+f sum(z_v)<=B, and sum_{e incident to v} c_e x_e <= h sum_{e incident to v} c_e. The latter is a sensitivity scenario for added incident capacity, not a verified router switching-fabric or port constraint.
+
+Compare d=1,2,3,4 under the same four-link count budget for Germany50. Additionally compare d=1 and d=4 under the same normalized capacity-cost budget; test a 50% incident-capacity headroom constraint. If every link has a positive published SNDlib candidate module price covering the modeled extra capacity, also compare a module-price proxy. Normalize prices by their median; router activation cost is 0.25 normalized units, and the illustrative total budget is K+2K*0.25. Module prices are historical benchmark input costs, not vendor quotations. The cheapest module large enough to cover the modeled doubling may be larger than the incremental capacity credited in the routing model. If prices are missing, omit that entire cost family and report coverage. The capacity-weighted proxy and setup/headroom assumptions are not measured deployment economics.
+
+### Bound and evaluation
+
+For the training mean normalized gain A(x), at an evaluated plan x0, the average normalized capacity-price vector g gives A(x)<=A(x0)+g dot (x-x0). The master maximizes an upper envelope over the chosen policy constraints; each actual training replay gives a feasible lower bound. The initial cut comes from all baseline training LPs. Numerical gaps and evaluated plans are retained; the iteration cap means a nonclosed gap is not a proof of optimality. The objective is mean training throughput, not minimum cost, so selected plans need not be cheapest among tied solutions.
+
+All selections use the first 144 chronological snapshots only. Evaluate the fixed placements on the final 144, report mean, minimum, median and fraction above 5%, as well as the number of affected routers and modeled capacity/cost. Compare each policy at the same budget where applicable. This is a sensitivity experiment on a previously inspected historical dataset; no independent operational validation is claimed. Independent small-star enumeration checks the degree, activation, cost and headroom constraints.
+
+Run: python cost_relaxation.py --mode self-test
+Historical: python cost_relaxation.py --mode historical --seconds 60 --iterations 6 --output results/cost-relaxation.json
