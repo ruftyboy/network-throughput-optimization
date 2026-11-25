@@ -23,6 +23,7 @@ from sndlib_benchmark import parse, URL
 
 EPS=0.005  # 0.5 percentage point training objective tolerance
 NUM=1e-6
+CUT_PAD=2e-6
 
 class Solver:
     def __init__(self,policy,models,bases,G,seconds,kind):
@@ -37,8 +38,33 @@ class Solver:
         self.calls=0;self.master_calls=0;self.master_seconds=0.
         self.upper={"all":1.,"matching":1.,"concentrated":1.}
         self.empty=set()
-        if policy.k<2:
+        self.incidents=[]
+        self.untrusted=set()
+        # All implemented policy restrictions are downward closed. A
+        # concentrated feasible plan exists iff some adjacent pair is feasible.
+        self.witness={"all":self.zero.copy(),"matching":self.zero.copy()}
+        if policy.k>=2:
+            for row in policy.incidence:
+                ids=np.flatnonzero(row)
+                for i,e in enumerate(ids):
+                    for f in ids[i+1:]:
+                        x=np.zeros(self.m);x[[e,f]]=1.
+                        try: policy.validate(x)
+                        except RuntimeError: continue
+                        self.witness["concentrated"]=x
+                        break
+                    if "concentrated" in self.witness:break
+                if "concentrated" in self.witness:break
+        if "concentrated" not in self.witness:
             self.upper["concentrated"]=0.;self.empty.add("concentrated")
+
+    def invalidate(self,label,reason):
+        # Never silently replace a contradictory numerical bound by the
+        # incumbent. Fall back to the physical doubling bound, and withhold
+        # optimality/classification certificates for this solver.
+        self.incidents.append({"class":label,"reason":reason})
+        self.untrusted.add(label)
+        self.upper[label]=1.
 
     def classify(self,x):
         return "concentrated" if np.max(self.p.incidence@x)>1.5 else "matching"
@@ -57,13 +83,23 @@ class Solver:
         if np.any(v>self.G@x+NUM) or min(v)<-NUM or max(v)>1+NUM:
             raise RuntimeError("Invalid routing gain or baseline bound")
         for a,b in self.cuts:
-            if np.any(v>a@x+b+NUM):raise RuntimeError("Dual cut violation")
+            if np.any(v>np.maximum(a,0.)@x+np.maximum(b,0.)+CUT_PAD+NUM):
+                # A violated supporting cut calls the routing certificate into
+                # question. Fail explicitly rather than conceal that problem.
+                raise RuntimeError("Dual cut violation after numerical padding")
+        intercept=v-g@x
+        for oldkey,(oldv,_) in self.cache.items():
+            ox=np.zeros(self.m);ox[list(oldkey)]=1.
+            if np.any(oldv>np.maximum(g,0.)@ox+np.maximum(intercept,0.)+CUT_PAD+NUM):
+                raise RuntimeError("New dual cut contradicts prior evaluated plan")
         self.cache[key]=(v,g)
-        self.cuts.append((g,v-g@x))
+        self.cuts.append((g,intercept))
         val=float(v.mean())
         for label in ("all",self.classify(x)):
             if self.best[label][0] is None or val>self.best[label][0]+1e-9:
                 self.best[label]=(val,x.copy())
+            if val>self.upper[label]+NUM:
+                self.invalidate(label,"new feasible value exceeds previously reported master bound")
 
     def master(self,label):
         if label in self.empty:return None,0.
@@ -85,33 +121,51 @@ class Solver:
             M[n,m+n+k:]=-1.
             A.append(M.tocsr());rhs.extend([0.]*n+[-1.])
         for g,b in self.cuts:
+            # Gains are nonnegative and x>=0. Raising tiny negative slopes
+            # and intercepts to zero can only relax (not strengthen) a cut.
+            # Add explicit outward rounding margin for numerical LP duals.
+            g=np.maximum(g,0.);b=np.maximum(b,0.)+CUT_PAD
             if self.kind=="aggregate":
                 g=g.mean(axis=0)[None,:];b=np.array([b.mean()])
             from scipy.sparse import eye
             A.append(hstack([-csr_matrix(g),csr_matrix((k,n)),eye(k),csr_matrix((k,w))]))
             rhs.extend(b.tolist())
         c=np.r_[np.zeros(m+n),np.full(k,-1./k),np.zeros(w)]
-        r=milp(c,integrality=np.r_[np.ones(m+n),np.zeros(k),np.ones(w)],
-               bounds=Bounds(np.zeros(N),np.ones(N)),
-               constraints=LinearConstraint(vstack(A).tocsr(),-np.inf,np.asarray(rhs)),
-               options={"time_limit":self.seconds,"mip_rel_gap":0.})
-        self.master_calls+=1;self.master_seconds+=time.monotonic()-start
-        if r.status==2:
-            if self.best[label][0] is not None:
-                raise RuntimeError("Master infeasible despite known feasible plan")
-            self.empty.add(label);self.upper[label]=0.;return None,0.
-        d=getattr(r,"mip_dual_bound",None)
-        ub=1. if d is None or not math.isfinite(d) else min(1.,max(0.,float(-d)))
-        self.upper[label]=min(self.upper[label],ub)
+        constraints=LinearConstraint(vstack(A).tocsr(),-np.inf,np.asarray(rhs))
         known=self.best[label][0]
-        if known is not None and known>self.upper[label]+NUM:
-            raise RuntimeError("Known lower bound exceeds master upper bound")
         x=None
-        if r.x is not None:
-            raw=r.x[:m];x=np.rint(raw)
-            if np.max(abs(raw-x))>1e-5:raise RuntimeError("Nonintegral incumbent")
-            p.validate(x)
-            if label!="all" and self.classify(x)!=label:raise RuntimeError("Wrong partition")
+        for presolve in (True,False):
+            r=milp(c,integrality=np.r_[np.ones(m+n),np.zeros(k),np.ones(w)],
+                   bounds=Bounds(np.zeros(N),np.ones(N)),constraints=constraints,
+                   options={"time_limit":self.seconds,"mip_rel_gap":0.,"presolve":presolve})
+            self.master_calls+=1
+            d=getattr(r,"mip_dual_bound",None)
+            ub=1. if d is None or not math.isfinite(d) else min(1.,max(0.,float(-d)+CUT_PAD))
+            problem=None
+            if r.status==2:
+                problem="master infeasible despite independently feasible class witness"
+            elif known is not None and known>ub+NUM:
+                problem="known lower bound exceeds reported master bound"
+            candidate=None
+            if r.x is not None:
+                raw=r.x[:m];candidate=np.rint(raw)
+                try:
+                    if np.max(abs(raw-candidate))>1e-5:raise RuntimeError("nonintegral incumbent")
+                    p.validate(candidate)
+                    if label!="all" and self.classify(candidate)!=label:raise RuntimeError("wrong partition")
+                except RuntimeError as e:
+                    problem=str(e);candidate=None
+            if candidate is not None:x=candidate
+            if problem is None:
+                if label not in self.untrusted:
+                    self.upper[label]=min(self.upper[label],ub)
+                break
+            self.incidents.append({"class":label,"reason":problem,"presolve":presolve})
+        else:
+            self.invalidate(label,"inconsistent master after presolve-disabled retry")
+        self.master_seconds+=time.monotonic()-start
+        if x is None and label in self.untrusted:
+            x=self.witness[label].copy()
         return x,self.upper[label]
 
     def run(self,adaptive,iterations):
@@ -143,10 +197,15 @@ class Solver:
             self.evaluate(x)
         value,x=self.best["all"]
         upper=max(self.upper["matching"],self.upper["concentrated"]) if adaptive else self.upper["all"]
-        if value>upper+NUM:raise RuntimeError("Global certificate violated")
+        if value>upper+NUM:
+            self.invalidate("all","global certificate contradicted by feasible incumbent")
+            upper=1.
+        if self.untrusted:upper=1.
         match=self.best["matching"][0];conc=self.best["concentrated"][0]
         classification="not_assessed"
-        if adaptive:
+        if adaptive and self.untrusted:
+            classification="unresolved_numerical"
+        elif adaptive:
             if upper-match<=EPS:
                 classification="matching_sufficient_within_tolerance"
             elif conc is not None and conc>self.upper["matching"]+EPS:
@@ -154,7 +213,8 @@ class Solver:
             else:classification="unresolved"
         return x,{"train_lower_pct":100*value,"train_upper_pct":100*max(value,upper),
                  "train_gap_pct_points":100*max(0.,upper-value),
-                 "within_tolerance":bool(upper-value<=EPS+NUM),
+                 "within_tolerance":bool(not self.untrusted and upper-value<=EPS+NUM),
+                 "numerical_incidents":self.incidents,"certificate_withheld":bool(self.untrusted),
                  "classification":classification,"matching_lower_pct":100*match,
                  "matching_upper_pct":100*self.upper["matching"] if adaptive else None,
                  "concentrated_lower_pct":None if conc is None else 100*conc,
@@ -188,7 +248,17 @@ def study(edges,cap,train,test,seconds,iterations):
         del solver
     for r in records.values():
         if max(values.values())>r["train_upper_pct"]+1e-4:
-            raise RuntimeError("Cross-method upper bound violation")
+            # A different independently evaluated placement disproves the
+            # reported upper bound. Retain feasible gains, but no certificate.
+            r["numerical_incidents"].append({"class":"all","reason":"cross-method upper bound contradicted"})
+            r["certificate_withheld"]=True
+            r["train_upper_pct"]=100.
+            r["train_gap_pct_points"]=max(0.,100.-r["train_lower_pct"])
+            r["within_tolerance"]=False
+            if r["classification"]!="not_assessed":
+                r["classification"]="unresolved_numerical"
+                r["matching_upper_pct"]=100.
+                r["concentrated_upper_pct"]=100.
     # Test only after all plans have been frozen. No tuning on test.
     if test:
         held,hb,H=scan(edges,cap,test,K,seconds);cache={}
