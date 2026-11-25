@@ -179,13 +179,19 @@ def trace_run(name,raw,args):
     edges,cap,_,meta=parse(raw,name,"module")
     nodes=set(v for e in edges for v in e)
     data=fetch(TRACES[name])
-    files=members(data)
-    # SNDlib uses timestamped matrix filenames. Sort by basename, not archive order.
-    names=sorted(files,key=lambda k:Path(k).name)
-    split=len(names)//2
-    a=spread(names[:split],args.train);b=spread(names[split:],args.test)
-    train=[demands(files[k],nodes) for k in a]
-    test=[demands(files[k],nodes) for k in b]
+    # Select matrix names first, then extract only the selected XML files.
+    # Avoid retaining tens of thousands of uncompressed XML matrices in RAM.
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as t:
+        names=sorted((m.name for m in t.getmembers() if m.isfile() and m.name.lower().endswith(".xml")),key=lambda k:Path(k).name)
+        split=len(names)//2
+        a=spread(names[:split],args.train);b=spread(names[split:],args.test)
+        wanted=set(a+b)
+        selected={}
+        for member in t.getmembers():
+            if member.name in wanted:
+                selected[member.name]=demands(t.extractfile(member).read(),nodes)
+    train=[selected[k] for k in a]
+    test=[selected[k] for k in b]
     return {**meta,"network":name,"traffic":"historical measurement-derived",
             "trace_url":TRACES[name],"trace_sha256":hashlib.sha256(data).hexdigest(),
             "available_matrices":len(names),"train_files":a,"test_files":b,
@@ -207,7 +213,9 @@ def zoo_run(args,rows,errors,skips):
             errors.append({"network":name,"stage":"graph parse","error":str(e)})
     # Deterministic sample of eligible files, fixed before any optimization.
     random.Random(2026).shuffle(eligible)
-    for name,raw,g in eligible[:args.limit]:
+    if args.offset+args.limit>len(eligible):
+        skips.append({"reason":"Requested range exceeds eligible topology count","eligible":len(eligible),"offset":args.offset,"limit":args.limit})
+    for name,raw,g in eligible[args.offset:args.offset+args.limit]:
         try:
             nodes=sorted(g.nodes);edges=sorted(tuple(sorted(e)) for e in g.edges)
             rng=random.Random(42)
@@ -247,6 +255,7 @@ def main():
     ap.add_argument("--test",type=int,default=6)
     ap.add_argument("--seconds",type=float,default=30)
     ap.add_argument("--limit",type=int,default=120)
+    ap.add_argument("--offset",type=int,default=0)
     ap.add_argument("--output",required=True)
     args=ap.parse_args()
     self_test()
