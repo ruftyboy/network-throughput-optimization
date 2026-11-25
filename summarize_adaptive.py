@@ -10,7 +10,10 @@ def describe(rows):
     names=("aggregate_direct","multicut_direct","adaptive_partition")
     for name in names:
         a=[r["methods"][name] for r in rows]
-        d={"certified_within_0_5pp":sum(v["within_tolerance"] for v in a),
+        d={"certificates_withheld":sum(v.get("certificate_withheld",False) for v in a),
+           "instances_with_numerical_incidents":sum(bool(v.get("numerical_incidents",[])) for v in a),
+           "numerical_incident_count":sum(len(v.get("numerical_incidents",[])) for v in a),
+           "certified_within_0_5pp":sum(v["within_tolerance"] for v in a),
            "mean_training_lower_pct":float(np.mean([v["train_lower_pct"] for v in a])),
            "mean_training_gap_pp":float(np.mean([v["train_gap_pct_points"] for v in a])),
            "median_selection_seconds":float(np.median([v["selection_seconds"] for v in a])),
